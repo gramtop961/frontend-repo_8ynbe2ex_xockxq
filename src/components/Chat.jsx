@@ -295,12 +295,28 @@ export default function Chat() {
 
       rec.onresult = (event) => {
         let transcript = ''
+        let hasFinal = false
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript
+          const res = event.results[i]
+          transcript += res[0].transcript
+          if (res.isFinal) hasFinal = true
         }
         setInput(transcript)
+        if (hasFinal) {
+          try { recognitionRef.current?.stop() } catch {}
+          setListening(false)
+          setVoiceStatus('')
+          // Auto-send the final transcript
+          setTimeout(() => {
+            if (transcript.trim()) {
+              setInput(transcript.trim())
+              sendMessage()
+            }
+          }, 0)
+        }
       }
       rec.onend = () => {
+        // If ended without final result, just stop the UI state
         setListening(false)
       }
       rec.onerror = (e) => {
@@ -311,7 +327,7 @@ export default function Chat() {
     }
 
     if (listening) {
-      recognitionRef.current.stop()
+      try { recognitionRef.current.stop() } catch {}
       setListening(false)
       return
     }
@@ -321,7 +337,7 @@ export default function Chat() {
 
     try {
       recognitionRef.current.start()
-      setVoiceStatus('Listening...')
+      setVoiceStatus('Listening... Speak now')
       setListening(true)
     } catch (e) {
       setListening(false)
@@ -377,7 +393,7 @@ export default function Chat() {
           </main>
 
           <footer className="fixed bottom-0 left-0 right-0 md:left-72">
-            <div className="max-w-4xl mx-auto px-3 sm:px-6 lg:px-8 pb=[calc(env(safe-area-inset-bottom)+16px)] sm:pb-6">
+            <div className="max-w-4xl mx-auto px-3 sm:px-6 lg:px-8 pb-[calc(env(safe-area-inset-bottom)+16px)] sm:pb-6">
               <div className="bg-slate-900/70 backdrop-blur border border-slate-700 rounded-2xl p-2 sm:p-3 shadow-xl">
                 <textarea
                   value={input}
