@@ -2,6 +2,12 @@ import { useEffect, useRef, useState, useMemo } from 'react'
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
+function StatusDot({ ok }) {
+  return (
+    <span className={`inline-block w-2 h-2 rounded-full ${ok ? 'bg-emerald-400' : 'bg-amber-400'} shadow`} title={ok ? 'Connected' : 'Offline'} />
+  )
+}
+
 function MessageBubble({ role, content, onSpeak, voiceEnabled }) {
   const isUser = role === 'user'
   return (
@@ -97,6 +103,7 @@ export default function Chat() {
   const [micPermission, setMicPermission] = useState('unknown') // unknown | granted | denied
   const [voiceStatus, setVoiceStatus] = useState('')
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [backendOK, setBackendOK] = useState(true)
   const endRef = useRef(null)
   const recognitionRef = useRef(null)
   const voicesRef = useRef([])
@@ -112,6 +119,12 @@ export default function Chat() {
     // Initialize: load conversations, or create a new one
     const init = async () => {
       try {
+        const ping = await fetch(`${BACKEND_URL}/test`)
+        setBackendOK(ping.ok)
+      } catch {
+        setBackendOK(false)
+      }
+      try {
         const res = await fetch(`${BACKEND_URL}/api/conversations`)
         const data = await res.json()
         setConversations(data)
@@ -125,6 +138,7 @@ export default function Chat() {
         }
       } catch (e) {
         // fallback to ephemeral single session
+        setActiveId('default')
         setMessages([{ role: 'assistant', content: "Hi! I'm Roger. How can I help today?" }])
       }
     }
@@ -208,9 +222,9 @@ export default function Chat() {
       const res = await fetch(`${BACKEND_URL}/api/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, conversation_id: activeId })
+        body: JSON.stringify({ message: text, conversation_id: activeId || 'default' })
       })
-      if (!res.ok) throw new Error('Request failed')
+      if (!res.ok) throw new Error(`Request failed: ${res.status}`)
       const data = await res.json()
       const reply = { role: 'assistant', content: data.reply }
       setMessages(prev => [...prev, reply])
@@ -222,7 +236,8 @@ export default function Chat() {
       } catch {}
       if (voiceEnabled) speakText(reply.content)
     } catch (e) {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I ran into an issue reaching the brain. Try again.' }])
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, I could not reach the server. Please check your connection and try again.' }])
+      setBackendOK(false)
     } finally {
       setLoading(false)
     }
@@ -328,6 +343,7 @@ export default function Chat() {
             <img src="/flame-icon.svg" alt="logo" className="w-7 h-7 sm:w-8 sm:h-8" />
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight">Roger</h1>
             <div className="ml-auto flex items-center gap-2 sm:gap-3 text-xs sm:text-sm text-slate-400">
+              <StatusDot ok={backendOK} />
               {recSupported ? (
                 <>
                   <label className="hidden sm:flex items-center gap-2 cursor-pointer select-none">
@@ -361,7 +377,7 @@ export default function Chat() {
           </main>
 
           <footer className="fixed bottom-0 left-0 right-0 md:left-72">
-            <div className="max-w-4xl mx-auto px-3 sm:px-6 lg:px-8 pb-[calc(env(safe-area-inset-bottom)+16px)]">
+            <div className="max-w-4xl mx-auto px-3 sm:px-6 lg:px-8 pb=[calc(env(safe-area-inset-bottom)+16px)] sm:pb-6">
               <div className="bg-slate-900/70 backdrop-blur border border-slate-700 rounded-2xl p-2 sm:p-3 shadow-xl">
                 <textarea
                   value={input}
