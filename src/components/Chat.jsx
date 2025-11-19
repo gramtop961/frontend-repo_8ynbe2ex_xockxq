@@ -5,7 +5,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 function MessageBubble({ role, content, onSpeak, voiceEnabled }) {
   const isUser = role === 'user'
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}> 
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
       <div className={`${isUser ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-100'} max-w-[80%] px-4 py-3 rounded-2xl shadow-md whitespace-pre-wrap relative`}
            style={{ borderTopRightRadius: isUser ? '0.5rem' : '1rem', borderTopLeftRadius: isUser ? '1rem' : '0.5rem' }}>
         {content}
@@ -59,10 +59,14 @@ export default function Chat() {
   const [loading, setLoading] = useState(false)
   const [voiceEnabled, setVoiceEnabled] = useState(true)
   const [listening, setListening] = useState(false)
+  const [micPermission, setMicPermission] = useState('unknown') // unknown | granted | denied
+  const [voiceStatus, setVoiceStatus] = useState('')
   const endRef = useRef(null)
   const recognitionRef = useRef(null)
+  const voicesRef = useRef([])
 
-  const speechSupported = useMemo(() => typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition), [])
+  const recSupported = useMemo(() => typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition), [])
+  const synthSupported = useMemo(() => typeof window !== 'undefined' && 'speechSynthesis' in window, [])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -90,6 +94,31 @@ export default function Chat() {
     }
     init()
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    // Preload speech synthesis voices (important for Safari/Chrome)
+    if (!synthSupported) return
+    const loadVoices = () => {
+      voicesRef.current = window.speechSynthesis.getVoices()
+    }
+    loadVoices()
+    window.speechSynthesis.onvoiceschanged = loadVoices
+    return () => { window.speechSynthesis.onvoiceschanged = null }
+  }, [synthSupported])
+
+  useEffect(() => {
+    // Check mic permission state where supported
+    const checkPermission = async () => {
+      try {
+        if (navigator?.permissions && navigator.permissions.query) {
+          const status = await navigator.permissions.query({ name: 'microphone' })
+          setMicPermission(status.state)
+          status.onchange = () => setMicPermission(status.state)
+        }
+      } catch {}
+    }
+    checkPermission()
   }, [])
 
   const createConversation = async (title) => {
@@ -172,37 +201,61 @@ export default function Chat() {
 
   // Voice: Speech Synthesis
   const speakText = (text) => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return
+    if (!synthSupported) return
     const utter = new SpeechSynthesisUtterance(text)
+    // Prefer a fairly natural voice when available
+    const preferred = voicesRef.current.find(v => /en-US|en_GB/i.test(v.lang) && /Female|Google|Natural/i.test(v.name)) || voicesRef.current[0]
+    if (preferred) utter.voice = preferred
     utter.rate = 1
     utter.pitch = 1
     utter.volume = 1
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(utter)
+    try {
+      window.speechSynthesis.cancel()
+      window.speechSynthesis.speak(utter)
+    } catch {}
+  }
+
+  // Request explicit mic permission (improves UX in some browsers/iframes)
+  const ensureMicPermission = async () => {
+    try {
+      if (!navigator?.mediaDevices?.getUserMedia) return true
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+      setMicPermission('granted')
+      return true
+    } catch (err) {
+      setMicPermission('denied')
+      setVoiceStatus('Microphone permission blocked. Please allow access in your browser settings.')
+      return false
+    }
   }
 
   // Voice: Speech Recognition (browser-provided)
-  const toggleListening = () => {
-    if (!speechSupported) return
+  const toggleListening = async () => {
+    if (!recSupported) {
+      setVoiceStatus('Speech recognition is not supported in this browser.')
+      return
+    }
+
     if (!recognitionRef.current) {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition
       const rec = new SR()
       rec.lang = 'en-US'
       rec.interimResults = true
-      rec.continuous = false
+      rec.continuous = true
 
       rec.onresult = (event) => {
         let transcript = ''
         for (let i = event.resultIndex; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript
         }
-        setInput(prev => transcript)
+        setInput(transcript)
       }
       rec.onend = () => {
         setListening(false)
       }
-      rec.onerror = () => {
+      rec.onerror = (e) => {
         setListening(false)
+        setVoiceStatus(e?.error === 'not-allowed' ? 'Microphone permission denied.' : 'Speech recognition error. Try again.')
       }
       recognitionRef.current = rec
     }
@@ -210,13 +263,19 @@ export default function Chat() {
     if (listening) {
       recognitionRef.current.stop()
       setListening(false)
-    } else {
-      try {
-        recognitionRef.current.start()
-        setListening(true)
-      } catch {
-        setListening(false)
-      }
+      return
+    }
+
+    const ok = await ensureMicPermission()
+    if (!ok) return
+
+    try {
+      recognitionRef.current.start()
+      setVoiceStatus('Listening...')
+      setListening(true)
+    } catch (e) {
+      setListening(false)
+      setVoiceStatus('Could not start speech recognition. Make sure only one tab is listening.')
     }
   }
 
@@ -232,7 +291,7 @@ export default function Chat() {
             <img src="/flame-icon.svg" alt="logo" className="w-8 h-8" />
             <h1 className="text-xl font-semibold tracking-tight">Professional AI Assistant</h1>
             <div className="ml-auto flex items-center gap-3 text-sm text-slate-400">
-              {speechSupported ? (
+              {recSupported ? (
                 <>
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" checked={voiceEnabled} onChange={(e) => setVoiceEnabled(e.target.checked)} />
@@ -246,9 +305,13 @@ export default function Chat() {
             </div>
           </header>
 
+          {voiceStatus && (
+            <div className="mx-4 sm:mx-6 lg:mx-8 -mt-3 mb-2 text-xs text-amber-300">{voiceStatus}</div>
+          )}
+
           <main className="flex-1 overflow-y-auto space-y-4 pb-32">
             {messages.map((m, i) => (
-              <MessageBubble key={i} role={m.role} content={m.content} voiceEnabled={voiceEnabled} onSpeak={() => speakText(m.content)} />
+              <MessageBubble key={i} role={m.role} content={m.content} voiceEnabled={voiceEnabled && synthSupported} onSpeak={() => speakText(m.content)} />
             ))}
             {loading && (
               <div className="flex gap-2 items-center text-slate-400">
@@ -274,7 +337,7 @@ export default function Chat() {
                 <div className="flex justify-between items-center px-2 pb-1">
                   <div className="text-xs text-slate-500">Shift+Enter for new line</div>
                   <div className="flex items-center gap-2">
-                    {speechSupported && (
+                    {recSupported && (
                       <button onClick={toggleListening} className={`px-3 py-2 rounded-lg border ${listening ? 'border-red-400 text-red-300' : 'border-slate-600 hover:border-slate-400'}`}>{listening ? 'Stop' : '🎙️ Speak'}</button>
                     )}
                     <button
